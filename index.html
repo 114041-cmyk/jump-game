@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8">
+    <title>Untitled</title>
+    
+
+  </head>
+    
+  <body>
+  <!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>萬壑松風：流泉 (The Winding Spring)</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #4e342e; /* 深褐色外框 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: "Microsoft JhengHei", serif;
+            color: #333;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            background-color: #f3e5dc; /* 宣紙/絹本底色 */
+            border: 8px solid #3e2723;
+            box-shadow: 0 0 40px rgba(0,0,0,0.5);
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #1a237e; /* 深藍色字體 */
+            pointer-events: none;
+        }
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 30px;
+            border-radius: 10px;
+            border: 2px solid #3e2723;
+            width: 300px;
+        }
+        #game-over-screen { display: none; }
+        h1 { margin: 0 0 10px 0; color: #3e2723; font-size: 24px; }
+        p { margin: 10px 0; font-size: 14px; color: #555; }
+        button {
+            background-color: #1565c0;
+            color: white;
+            border: none;
+            padding: 10px 25px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        button:hover { background-color: #0d47a1; }
+        .key-hint {
+            display: inline-block;
+            background: #eee;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="450" height="700"></canvas>
+    
+    <div id="ui-layer">
+        生機值: <span id="score">0</span>
+    </div>
+
+    <div id="start-screen">
+        <h1>萬壑松風：流泉</h1>
+        <p>「泉水潺潺流動，交織出充滿生命活力的境界。」</p>
+        <p>控制流泉，避開<b>斧劈皴山石</b>，<br>滋潤沿途的<b>青綠松林</b>。</p>
+        <p>
+            <span class="key-hint">←</span> 左移
+            <span class="key-hint">→</span> 右移
+        </p>
+        <button onclick="initGame()">開始流淌</button>
+    </div>
+
+    <div id="game-over-screen">
+        <h1>水流阻斷</h1>
+        <p>遭遇堅硬岩石，水流無法通過。</p>
+        <p>最終生機: <span id="final-score">0</span></p>
+        <button onclick="initGame()">重新發源</button>
+    </div>
+</div>
+
+<script>
+/**
+ * 遊戲：萬壑松風 流泉 (Downhill Stream Runner)
+ * 概念：模擬畫作中從上而下的流泉，閃避岩石(斧劈皴)，接近松樹得分。
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'START'; // START, PLAYING, GAMEOVER
+let score = 0;
+let frameCount = 0;
+let speed = 4; // 初始流速
+
+// 玩家 (流泉頭部)
+const player = {
+    x: 225,
+    y: 100, // 固定在畫面上方
+    radius: 8,
+    trail: [] // 紀錄軌跡用來畫河流身體
+};
+
+// 物件陣列
+let obstacles = []; // 岩石 (Rocks)
+let bonuses = [];   // 松樹 (Pines)
+let particles = []; // 水花 (Particles)
+
+// 鍵盤狀態
+const keys = { left: false, right: false };
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') keys.left = true;
+    if (e.key === 'ArrowRight') keys.right = true;
+});
+document.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft') keys.left = false;
+    if (e.key === 'ArrowRight') keys.right = false;
+});
+
+function initGame() {
+    gameState = 'PLAYING';
+    score = 0;
+    speed = 4;
+    frameCount = 0;
+    player.x = canvas.width / 2;
+    player.trail = [];
+    obstacles = [];
+    bonuses = [];
+    particles = [];
+    
+    document.getElementById('score').innerText = score;
+    document.getElementById('start-screen').style.display = 'none';
+    document.getElementById('game-over-screen').style.display = 'none';
+    
+    // 預先生成一些軌跡以免開場空白
+    for(let i=0; i<20; i++) {
+        player.trail.push({x: player.x, y: player.y - i*speed});
+    }
+
+    loop();
+}
+
+function spawnObjects() {
+    // 隨著分數增加，難度(速度與密度)增加
+    if (frameCount % (60 - Math.min(40, Math.floor(score/50))) === 0) {
+        let type = Math.random();
+        let objX = Math.random() * (canvas.width - 40) + 20;
+        let objY = canvas.height + 50; // 從下方生成往上移
+
+        if (type > 0.4) {
+            // 生成岩石 (60%機率)
+            let size = 30 + Math.random() * 30;
+            obstacles.push({
+                x: objX,
+                y: objY,
+                w: size,
+                h: size * 0.8,
+                type: 'rock'
+            });
+        } else {
+            // 生成松樹 (40%機率)
+            let size = 40;
+            bonuses.push({
+                x: objX,
+                y: objY,
+                w: size,
+                h: size,
+                collected: false,
+                type: 'pine'
+            });
+        }
+    }
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+    frameCount++;
+    
+    // 1. 玩家移動
+    if (keys.left) player.x -= 5;
+    if (keys.right) player.x += 5;
+    
+    // 邊界檢查
+    if (player.x < 10) player.x = 10;
+    if (player.x > canvas.width - 10) player.x = canvas.width - 10;
+
+    // 2. 更新軌跡 (河流身體)
+    // 每一幀將當前位置加入軌跡，並移除過舊的
+    player.trail.unshift({x: player.x, y: player.y});
+    if (player.trail.length > 100) {
+        player.trail.pop();
+    }
+    // 讓軌跡點往上移 (模擬往下流的視覺)
+    for (let p of player.trail) {
+        p.y -= speed;
+    }
+
+    // 3. 物件移動 (往上移)
+    spawnObjects();
+    
+    // 岩石邏輯
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        let obs = obstacles[i];
+        obs.y -= speed;
+        
+        // 碰撞檢測 (圓形與矩形)
+        // 簡單判定：距離小於半徑+岩石一半
+        let dx = player.x - obs.x;
+        let dy = player.y - obs.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        
+        if (dist < player.radius + obs.w/2) {
+            gameOver();
+        }
+        
+        if (obs.y < -100) obstacles.splice(i, 1);
+    }
+
+    // 松樹邏輯
+    for (let i = bonuses.length - 1; i >= 0; i--) {
+        let pine = bonuses[i];
+        pine.y -= speed;
+        
+        let dx = player.x - pine.x;
+        let dy = player.y - pine.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        
+        // 擦身而過判定 (距離夠近，但不是直接撞擊中心，這裡設寬鬆一點視為「滋潤」)
+        if (!pine.collected && dist < pine.w/1.2) {
+            pine.collected = true;
+            score += 10;
+            document.getElementById('score').innerText = score;
+            createWaterSplash(pine.x, pine.y); // 特效
+            
+            // 加速
+            if (score % 100 === 0) speed += 0.5;
+        }
+        
+        if (pine.y < -100) bonuses.splice(i, 1);
+    }
+
+    // 粒子效果更新
+    updateParticles();
+}
+
+function createWaterSplash(x, y) {
+    for (let i = 0; i < 8; i++) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 4,
+            vy: (Math.random() - 0.5) * 4,
+            life: 20,
+            color: '#4fc3f7'
+        });
+    }
+}
+
+function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
+function draw() {
+    // 清空背景 (絹本色)
+    ctx.fillStyle = '#f3e5dc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // 畫背景紋理 (淡墨山影) - 簡單裝飾
+    ctx.fillStyle = '#e6d6c8';
+    ctx.beginPath();
+    ctx.moveTo(0, 700);
+    ctx.lineTo(100, 500);
+    ctx.lineTo(300, 600);
+    ctx.lineTo(450, 400);
+    ctx.lineTo(450, 700);
+    ctx.fill();
+
+    // 1. 畫軌跡 (河流)
+    if (player.trail.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(player.trail[0].x, player.trail[0].y);
+        for (let i = 1; i < player.trail.length; i++) {
+            // 讓河道變寬
+            let width = 5 + i * 0.1; 
+            ctx.lineWidth = width;
+            ctx.lineTo(player.trail[i].x, player.trail[i].y);
+        }
+        ctx.strokeStyle = '#29b6f6'; // 亮藍色
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+    }
+
+    // 2. 畫松樹 (Pines)
+    for (let p of bonuses) {
+        // 樹幹
+        ctx.fillStyle = '#3e2723';
+        ctx.fillRect(p.x - 4, p.y, 8, 20);
+        // 樹葉 (濃重青綠)
+        ctx.fillStyle = p.collected ? '#4caf50' : '#1b5e20'; // 被滋潤後變亮
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - 20);
+        ctx.lineTo(p.x + 20, p.y + 10);
+        ctx.lineTo(p.x - 20, p.y + 10);
+        ctx.fill();
+        
+        if (p.collected) {
+            ctx.fillStyle = 'gold';
+            ctx.font = '12px Arial';
+            ctx.fillText("+10", p.x + 10, p.y - 20);
+        }
+    }
+
+    // 3. 畫岩石 (Rocks - 斧劈皴風格)
+    for (let r of obstacles) {
+        ctx.fillStyle = '#212121'; // 濃墨
+        ctx.beginPath();
+        ctx.moveTo(r.x, r.y - r.h/2);
+        ctx.lineTo(r.x + r.w/2, r.y);
+        ctx.lineTo(r.x + r.w/3, r.y + r.h/2);
+        ctx.lineTo(r.x - r.w/2, r.y + r.h/2);
+        ctx.lineTo(r.x - r.w/3, r.y);
+        ctx.fill();
+        
+        // 皴法筆觸 (白色線條模擬光影與銳利感)
+        ctx.strokeStyle = '#616161';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(r.x - 5, r.y - 10);
+        ctx.lineTo(r.x + 10, r.y + 10);
+        ctx.stroke();
+    }
+
+    // 4. 畫玩家 (泉頭)
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2);
+    ctx.fillStyle = '#e1f5fe'; // 浪花白
+    ctx.fill();
+
+    // 5. 畫粒子
+    for (let p of particles) {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 3, 3);
+    }
+}
+
+function gameOver() {
+    gameState = 'GAMEOVER';
+    document.getElementById('final-score').innerText = score;
+    document.getElementById('game-over-screen').style.display = 'block';
+}
+
+function loop() {
+    if (gameState === 'PLAYING') {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+}
+
+// 初始繪製
+draw();
+
+</script>
+</body>
+</html>
+    
+  </body>
+  
+</html>
